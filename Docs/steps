@@ -1,0 +1,63 @@
+1. Download Intellij
+  	a. Window: https://www.jetbrains.com/idea/download/#section=windows
+  	b. Linux:  https://www.jetbrains.com/idea/download/#section=linux
+  	
+2. Set mvn path
+	a. set PATH=%PATH%;<your mvn path>
+	b. export PATH=$PATH:<your mvn path>
+	  	
+3. Create github id, if already not there
+ 	https://github.com/openlookeng
+4. Click on watch, star, fork
+5. Join openLooKeng Raffle
+ 	https://openlookeng.io/events/raffle.html
+6. Open intellij
+ 	Click on 'Get from VCS'.
+ 	URL: Enter your repository path
+ 	Directory: Enter target directory to download code
+ 	
+7. Code compilation 	
+ 	a. Download pre-built jars
+ 		https://github.com/RajeevRastogi/osiworkshop2021.git
+ 	b. From the path of prebuiltjars
+ 		copy pom.xml to your root of code path   
+ 			cp pom.xml <code_path>/pom.xml
+	c. compilation code:
+		mvn clean install -DskipTests -Dair.check.skip-all=true -Dmaven.test.skip=false -Dmaven.gitcommitid.skip=true
+		
+--This is going to take some time---
+
+Once code and UT are developed; run UT
+1. Go to the module where UT is added
+	mvn -Dair.check.skip-all=false -Dmaven.test.skip=false -Dmaven.gitcommitid.skip=true -Dtest=TestClassName#testName test clean
+ 	
+Once build passed, commit code to your branch and raise PR:
+1. Configure your Git username/email
+	Open git bash
+	a. Set your username
+		git config --global user.name "FIRST_NAME LAST_NAME"
+
+	b. Set your email address
+		git config --global user.email "MY_NAME@example.com"
+
+2. Add all your file changes to repo using:
+	git add <filepath>		--give each file name which you have changed
+
+3. Add one issue to github main repository for your requirement
+	https://github.com/openlookeng/hetu-core/issues
+	Fill all required details. You will get one issue id here say '#IAFC'
+		
+4. Commit code
+	git commit –m “[#IAFC] your commit message”
+	
+5. Push your changes to your repository
+	git push origin <branch-name>		
+	
+6. Raise PR:
+	a. Goto to your repository
+	b. Click on 'New pull request'
+	c. Select source branch and target branch. Source branch is our local branch and target branch is openlookeng/hetu-core master
+	d. Give Title as [<issue-id>] <title-name>
+	e. Provide fixes #<issue-id> and fill other required information related to PR in order to the issues fix to PR.
+		 		 	
+  	

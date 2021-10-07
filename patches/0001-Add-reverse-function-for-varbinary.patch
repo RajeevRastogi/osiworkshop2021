@@ -1,0 +1,58 @@
+From af12290d24c0a4282104aba1d6ce7b48a9d11e90 Mon Sep 17 00:00:00 2001
+From: Surya Sumanth N <ssumanth21@gmail.com>
+Date: Thu, 7 Oct 2021 00:08:59 +0530
+Subject: [PATCH] Add reverse function for varbinary
+
+---
+ .../operator/scalar/VarbinaryFunctions.java      | 16 ++++++++++++++++
+ .../operator/scalar/TestVarbinaryFunctions.java  |  9 +++++++++
+ 2 files changed, 25 insertions(+)
+
+diff --git a/presto-main/src/main/java/io/prestosql/operator/scalar/VarbinaryFunctions.java b/presto-main/src/main/java/io/prestosql/operator/scalar/VarbinaryFunctions.java
+index c526d8f7..6ec961e5 100644
+--- a/presto-main/src/main/java/io/prestosql/operator/scalar/VarbinaryFunctions.java
++++ b/presto-main/src/main/java/io/prestosql/operator/scalar/VarbinaryFunctions.java
+@@ -421,4 +421,20 @@ public final class VarbinaryFunctions
+     {
+         return pad(inputSlice, targetLength, padBytes, inputSlice.length());
+     }
++
++    @Description("Reverse a given varbinary")
++    @ScalarFunction("reverse")
++    @SqlType(StandardTypes.VARBINARY)
++    public static Slice reverse(@SqlType("varbinary") Slice inputSlice)
++    {
++        if (inputSlice.length() == 0) {
++            return EMPTY_SLICE;
++        }
++        int length = inputSlice.length();
++        Slice reverse = Slices.allocate(length);
++        for (int i = 0; i < length; i++) {
++            reverse.setByte(i, inputSlice.getByte((length - 1) - i));
++        }
++        return reverse;
++    }
+ }
+diff --git a/presto-main/src/test/java/io/prestosql/operator/scalar/TestVarbinaryFunctions.java b/presto-main/src/test/java/io/prestosql/operator/scalar/TestVarbinaryFunctions.java
+index a84dbf38..2e6ec38a 100644
+--- a/presto-main/src/test/java/io/prestosql/operator/scalar/TestVarbinaryFunctions.java
++++ b/presto-main/src/test/java/io/prestosql/operator/scalar/TestVarbinaryFunctions.java
+@@ -440,6 +440,15 @@ public class TestVarbinaryFunctions
+         assertOperator(INDETERMINATE, "X'58'", BOOLEAN, false);
+     }
+ 
++    @Test
++    public void testReverse()
++    {
++        assertFunction("REVERSE(CAST('' AS VARBINARY))", VARBINARY, sqlVarbinary(""));
++        assertFunction("REVERSE(CAST('hello' AS VARBINARY))", VARBINARY, sqlVarbinary("olleh"));
++        assertFunction("REVERSE(CAST('Quadratically' AS VARBINARY))", VARBINARY, sqlVarbinary("yllacitardauQ"));
++        assertFunction("REVERSE(CAST('racecar' AS VARBINARY))", VARBINARY, sqlVarbinary("racecar"));
++    }
++
+     private static String encodeBase64(byte[] value)
+     {
+         return Base64.getEncoder().encodeToString(value);
+-- 
+2.28.0.windows.1
+

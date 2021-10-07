@@ -1,0 +1,79 @@
+From 23a683806c4b6520bb42f2233087eab4a22ebd54 Mon Sep 17 00:00:00 2001
+From: SURYA SUMANTH N <ssumanth21@gmail.com>
+Date: Wed, 6 Oct 2021 20:22:35 +0530
+Subject: [PATCH] Inconsistent error reporting when schema does not exist
+
+---
+ .../java/io/prestosql/sql/analyzer/SemanticErrorCode.java | 2 ++
+ .../java/io/prestosql/sql/rewrite/ShowQueriesRewrite.java | 8 ++++++++
+ .../test/java/io/prestosql/plugin/tpcds/TestTpcds.java    | 8 ++++++++
+ 3 files changed, 18 insertions(+)
+
+diff --git a/presto-main/src/main/java/io/prestosql/sql/analyzer/SemanticErrorCode.java b/presto-main/src/main/java/io/prestosql/sql/analyzer/SemanticErrorCode.java
+index f27d7d3c..aa8d8304 100644
+--- a/presto-main/src/main/java/io/prestosql/sql/analyzer/SemanticErrorCode.java
++++ b/presto-main/src/main/java/io/prestosql/sql/analyzer/SemanticErrorCode.java
+@@ -37,7 +37,9 @@ public enum SemanticErrorCode
+     INSERT_INTO_CUBE,
+ 
+     CATALOG_NOT_SPECIFIED,
++    CATALOG_NOT_FOUND,
+     SCHEMA_NOT_SPECIFIED,
++    SCHEMA_NOT_FOUND,
+ 
+     INVALID_SCHEMA_NAME,
+     INVALID_COLUMN,
+diff --git a/presto-main/src/main/java/io/prestosql/sql/rewrite/ShowQueriesRewrite.java b/presto-main/src/main/java/io/prestosql/sql/rewrite/ShowQueriesRewrite.java
+index ea5c860f..a5cbc3ba 100644
+--- a/presto-main/src/main/java/io/prestosql/sql/rewrite/ShowQueriesRewrite.java
++++ b/presto-main/src/main/java/io/prestosql/sql/rewrite/ShowQueriesRewrite.java
+@@ -161,12 +161,14 @@ import static io.prestosql.sql.QueryUtil.simpleQuery;
+ import static io.prestosql.sql.QueryUtil.singleValueQuery;
+ import static io.prestosql.sql.QueryUtil.table;
+ import static io.prestosql.sql.SqlFormatter.formatSql;
++import static io.prestosql.sql.analyzer.SemanticErrorCode.CATALOG_NOT_FOUND;
+ import static io.prestosql.sql.analyzer.SemanticErrorCode.CATALOG_NOT_SPECIFIED;
+ import static io.prestosql.sql.analyzer.SemanticErrorCode.MISSING_CACHE;
+ import static io.prestosql.sql.analyzer.SemanticErrorCode.MISSING_CATALOG;
+ import static io.prestosql.sql.analyzer.SemanticErrorCode.MISSING_SCHEMA;
+ import static io.prestosql.sql.analyzer.SemanticErrorCode.MISSING_TABLE;
+ import static io.prestosql.sql.analyzer.SemanticErrorCode.NOT_SUPPORTED;
++import static io.prestosql.sql.analyzer.SemanticErrorCode.SCHEMA_NOT_FOUND;
+ import static io.prestosql.sql.analyzer.SemanticErrorCode.VIEW_PARSE_ERROR;
+ import static io.prestosql.sql.tree.BooleanLiteral.FALSE_LITERAL;
+ import static io.prestosql.sql.tree.BooleanLiteral.TRUE_LITERAL;
+@@ -517,6 +519,12 @@ final class ShowQueriesRewrite
+         {
+             QualifiedObjectName tableName = createQualifiedObjectName(session, showColumns, showColumns.getTable());
+ 
++            if (!metadata.getCatalogHandle(session, tableName.getCatalogName()).isPresent()) {
++                throw new SemanticException(CATALOG_NOT_FOUND, showColumns, "Catalog '%s' does not exist", tableName.getCatalogName());
++            }
++            if (!metadata.schemaExists(session, new CatalogSchemaName(tableName.getCatalogName(), tableName.getSchemaName()))) {
++                throw new SemanticException(SCHEMA_NOT_FOUND, showColumns, "Schema '%s' does not exist", tableName.getSchemaName());
++            }
+             if (!metadata.getView(session, tableName).isPresent() &&
+                     !metadata.getTableHandle(session, tableName).isPresent()) {
+                 throw new SemanticException(MISSING_TABLE, showColumns, "Table '%s' does not exist", tableName);
+diff --git a/presto-tpcds/src/test/java/io/prestosql/plugin/tpcds/TestTpcds.java b/presto-tpcds/src/test/java/io/prestosql/plugin/tpcds/TestTpcds.java
+index ce95a9f1..c12c65b4 100644
+--- a/presto-tpcds/src/test/java/io/prestosql/plugin/tpcds/TestTpcds.java
++++ b/presto-tpcds/src/test/java/io/prestosql/plugin/tpcds/TestTpcds.java
+@@ -84,6 +84,14 @@ public class TestTpcds
+         assertQueryFails("SHOW TABLES FROM sf0", "line 1:1: Schema 'sf0' does not exist");
+     }
+ 
++    @Test
++    public void testShowColumnsInvalidSchemaCatalog()
++            throws Exception
++    {
++        assertQueryFails("SHOW COLUMNS FROM tpch1.non_existent", ".* Schema 'tpch1' does not exist");
++        assertQueryFails("SHOW COLUMNS FROM xyz.tpch1.non_existent", ".* Catalog 'xyz' does not exist");
++    }
++
+     private Session createSession(String schemaName)
+     {
+         return testSessionBuilder()
+-- 
+2.25.1
+

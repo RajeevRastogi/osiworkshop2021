@@ -1,0 +1,317 @@
+From f965ae26bc6087f57cfe99a34e984e46058c739e Mon Sep 17 00:00:00 2001
+From: SURYA SUMANTH N <ssumanth21@gmail.com>
+Date: Wed, 6 Oct 2021 14:06:29 +0530
+Subject: [PATCH] Add session properties for per node memory limits
+
+---
+ .../io/prestosql/SystemSessionProperties.java | 30 +++++++-
+ .../prestosql/execution/SqlTaskManager.java   | 22 +++++-
+ .../io/prestosql/memory/QueryContext.java     | 10 +++
+ .../prestosql/testing/LocalQueryRunner.java   |  3 +-
+ .../java/io/prestosql/SessionTestUtils.java   |  4 +-
+ .../prestosql/sql/analyzer/TestAnalyzer.java  |  4 +-
+ .../memory/TestMemorySessionProperties.java   | 70 +++++++++++++++++++
+ 7 files changed, 135 insertions(+), 8 deletions(-)
+ create mode 100644 presto-tests/src/test/java/io/prestosql/memory/TestMemorySessionProperties.java
+
+diff --git a/presto-main/src/main/java/io/prestosql/SystemSessionProperties.java b/presto-main/src/main/java/io/prestosql/SystemSessionProperties.java
+index 8930b918..2f7a6136 100644
+--- a/presto-main/src/main/java/io/prestosql/SystemSessionProperties.java
++++ b/presto-main/src/main/java/io/prestosql/SystemSessionProperties.java
+@@ -19,6 +19,7 @@ import io.airlift.units.Duration;
+ import io.prestosql.execution.QueryManagerConfig;
+ import io.prestosql.execution.TaskManagerConfig;
+ import io.prestosql.memory.MemoryManagerConfig;
++import io.prestosql.memory.NodeMemoryConfig;
+ import io.prestosql.snapshot.SnapshotConfig;
+ import io.prestosql.spi.PrestoException;
+ import io.prestosql.spi.session.PropertyMetadata;
+@@ -168,12 +169,14 @@ public final class SystemSessionProperties
+     public static final String SNAPSHOT_RETRY_TIMEOUT = "snapshot_retry_timeout";
+     public static final String SKIP_ATTACHING_STATS_WITH_PLAN = "skip_attaching_stats_with_plan";
+     public static final String SKIP_NON_APPLICABLE_RULES_ENABLED = "skip_non_applicable_rules_enabled";
++    public static final String QUERY_MAX_MEMORY_PER_NODE = "query_max_memory_per_node";
++    public static final String QUERY_MAX_TOTAL_MEMORY_PER_NODE = "query_max_total_memory_per_node";
+ 
+     private final List<PropertyMetadata<?>> sessionProperties;
+ 
+     public SystemSessionProperties()
+     {
+-        this(new QueryManagerConfig(), new TaskManagerConfig(), new MemoryManagerConfig(), new FeaturesConfig(), new HetuConfig(), new SnapshotConfig());
++        this(new QueryManagerConfig(), new TaskManagerConfig(), new MemoryManagerConfig(), new FeaturesConfig(), new HetuConfig(), new SnapshotConfig(), new NodeMemoryConfig());
+     }
+ 
+     @Inject
+@@ -183,7 +186,8 @@ public final class SystemSessionProperties
+             MemoryManagerConfig memoryManagerConfig,
+             FeaturesConfig featuresConfig,
+             HetuConfig hetuConfig,
+-            SnapshotConfig snapshotConfig)
++            SnapshotConfig snapshotConfig,
++            NodeMemoryConfig nodeMemoryConfig)
+     {
+         sessionProperties = ImmutableList.of(
+                 stringProperty(
+@@ -780,7 +784,17 @@ public final class SystemSessionProperties
+                         SKIP_NON_APPLICABLE_RULES_ENABLED,
+                         "Whether to skip applying some selected rules based on query pattern",
+                         featuresConfig.isSkipNonApplicableRulesEnabled(),
+-                        false));
++                        false),
++                dataSizeProperty(
++                        QUERY_MAX_MEMORY_PER_NODE,
++                        "Maximum amount of memory a query can use per node",
++                        nodeMemoryConfig.getMaxQueryMemoryPerNode(),
++                        true),
++                dataSizeProperty(
++                        QUERY_MAX_TOTAL_MEMORY_PER_NODE,
++                        "Maximum amount of total memory a query can use per node",
++                        nodeMemoryConfig.getMaxQueryTotalMemoryPerNode(),
++                        true));
+     }
+ 
+     public List<PropertyMetadata<?>> getSessionProperties()
+@@ -1373,4 +1387,14 @@ public final class SystemSessionProperties
+     {
+         return session.getSystemProperty(SKIP_NON_APPLICABLE_RULES_ENABLED, Boolean.class);
+     }
++
++    public static DataSize getQueryMaxMemoryPerNode(Session session)
++    {
++        return session.getSystemProperty(QUERY_MAX_MEMORY_PER_NODE, DataSize.class);
++    }
++
++    public static DataSize getQueryMaxTotalMemoryPerNode(Session session)
++    {
++        return session.getSystemProperty(QUERY_MAX_TOTAL_MEMORY_PER_NODE, DataSize.class);
++    }
+ }
+diff --git a/presto-main/src/main/java/io/prestosql/execution/SqlTaskManager.java b/presto-main/src/main/java/io/prestosql/execution/SqlTaskManager.java
+index de7a2ced..1c938518 100644
+--- a/presto-main/src/main/java/io/prestosql/execution/SqlTaskManager.java
++++ b/presto-main/src/main/java/io/prestosql/execution/SqlTaskManager.java
+@@ -76,6 +76,8 @@ import java.util.concurrent.TimeUnit;
+ import static com.google.common.base.Preconditions.checkArgument;
+ import static com.google.common.collect.Iterables.transform;
+ import static io.airlift.concurrent.Threads.threadsNamed;
++import static io.prestosql.SystemSessionProperties.getQueryMaxMemoryPerNode;
++import static io.prestosql.SystemSessionProperties.getQueryMaxTotalMemoryPerNode;
+ import static io.prestosql.SystemSessionProperties.resourceOvercommit;
+ import static io.prestosql.execution.SqlTask.createSqlTask;
+ import static io.prestosql.memory.LocalMemoryManager.GENERAL_POOL;
+@@ -118,6 +120,9 @@ public class SqlTaskManager
+ 
+     private final SnapshotUtils snapshotUtils;
+ 
++    private final long queryMaxMemoryPerNode;
++    private final long queryMaxTotalMemoryPerNode;
++
+     @GuardedBy("this")
+     private long currentMemoryPoolAssignmentVersion;
+     @GuardedBy("this")
+@@ -170,10 +175,13 @@ public class SqlTaskManager
+         DataSize maxQueryUserMemoryPerNode = nodeMemoryConfig.getMaxQueryMemoryPerNode();
+         DataSize maxQueryTotalMemoryPerNode = nodeMemoryConfig.getMaxQueryTotalMemoryPerNode();
+         DataSize maxQuerySpillPerNode = nodeSpillConfig.getQueryMaxSpillPerNode();
++        DataSize maxQueryMemoryPerNode = nodeMemoryConfig.getMaxQueryMemoryPerNode();
++        queryMaxMemoryPerNode = maxQueryMemoryPerNode.toBytes();
++        queryMaxTotalMemoryPerNode = maxQueryMemoryPerNode.toBytes();
+ 
+         this.snapshotUtils = requireNonNull(snapshotUtils, "snapshotUtils cannot be null");
+         queryContexts = CacheBuilder.newBuilder().weakValues().build(CacheLoader.from(
+-                queryId -> createQueryContext(queryId, localMemoryManager, nodeMemoryConfig, localSpillManager, gcMonitor, maxQueryUserMemoryPerNode, maxQueryTotalMemoryPerNode, maxQuerySpillPerNode, snapshotUtils)));
++                queryId -> createQueryContext(queryId, localMemoryManager, localSpillManager, gcMonitor, maxQueryUserMemoryPerNode, maxQueryTotalMemoryPerNode, maxQuerySpillPerNode, snapshotUtils)));
+ 
+         this.locationFactory = locationFactory;
+         this.nodeInfo = nodeInfo;
+@@ -239,7 +247,6 @@ public class SqlTaskManager
+     private QueryContext createQueryContext(
+             QueryId queryId,
+             LocalMemoryManager localMemoryManager,
+-            NodeMemoryConfig nodeMemoryConfig,
+             LocalSpillManager localSpillManager,
+             GcMonitor gcMonitor,
+             DataSize maxQueryUserMemoryPerNode,
+@@ -438,6 +445,17 @@ public class SqlTaskManager
+         requireNonNull(sources, "sources is null");
+         requireNonNull(outputBuffers, "outputBuffers is null");
+ 
++        long sessionQueryMaxMemoryPerNode = getQueryMaxMemoryPerNode(session).toBytes();
++        long sessionQueryTotalMaxMemoryPerNode = getQueryMaxTotalMemoryPerNode(session).toBytes();
++        // Session property query_max_memory_per_node is used to only decrease memory limit
++        if (sessionQueryMaxMemoryPerNode <= queryMaxMemoryPerNode) {
++            queryContexts.getUnchecked(taskId.getQueryId()).setMaxUserMemory(sessionQueryMaxMemoryPerNode);
++        }
++
++        if (sessionQueryTotalMaxMemoryPerNode <= queryMaxTotalMemoryPerNode) {
++            queryContexts.getUnchecked(taskId.getQueryId()).setMaxTotalMemory(sessionQueryTotalMaxMemoryPerNode);
++        }
++
+         SqlTask sqlTask = getTaskOrCreate(expectedTaskInstanceId, taskId);
+         if (sqlTask == null) {
+             return null;
+diff --git a/presto-main/src/main/java/io/prestosql/memory/QueryContext.java b/presto-main/src/main/java/io/prestosql/memory/QueryContext.java
+index 95ef4a71..90c236ac 100644
+--- a/presto-main/src/main/java/io/prestosql/memory/QueryContext.java
++++ b/presto-main/src/main/java/io/prestosql/memory/QueryContext.java
+@@ -250,6 +250,16 @@ public class QueryContext
+         }, directExecutor());
+     }
+ 
++    public synchronized void setMaxUserMemory(long maxUserMemory)
++    {
++        this.maxUserMemory = maxUserMemory;
++    }
++
++    public synchronized void setMaxTotalMemory(long maxTotalMemory)
++    {
++        this.maxTotalMemory = maxTotalMemory;
++    }
++
+     public synchronized MemoryPool getMemoryPool()
+     {
+         return memoryPool;
+diff --git a/presto-main/src/main/java/io/prestosql/testing/LocalQueryRunner.java b/presto-main/src/main/java/io/prestosql/testing/LocalQueryRunner.java
+index b6d4dd0a..4008883c 100644
+--- a/presto-main/src/main/java/io/prestosql/testing/LocalQueryRunner.java
++++ b/presto-main/src/main/java/io/prestosql/testing/LocalQueryRunner.java
+@@ -83,6 +83,7 @@ import io.prestosql.filesystem.FileSystemClientManager;
+ import io.prestosql.heuristicindex.HeuristicIndexerManager;
+ import io.prestosql.index.IndexManager;
+ import io.prestosql.memory.MemoryManagerConfig;
++import io.prestosql.memory.NodeMemoryConfig;
+ import io.prestosql.metadata.AnalyzePropertyManager;
+ import io.prestosql.metadata.CatalogManager;
+ import io.prestosql.metadata.ColumnPropertyManager;
+@@ -343,7 +344,7 @@ public class LocalQueryRunner
+                 new FunctionAndTypeManager(transactionManager, featuresConfig, new HandleResolver(), ImmutableSet.of()),
+                 featuresConfig,
+                 // new HetuConfig object passed, if split filtering is needed in the runner, a modified HetuConfig object with filter settings manually set must be used.
+-                new SessionPropertyManager(new SystemSessionProperties(new QueryManagerConfig(), taskManagerConfig, new MemoryManagerConfig(), featuresConfig, new HetuConfig(), new SnapshotConfig())),
++                new SessionPropertyManager(new SystemSessionProperties(new QueryManagerConfig(), taskManagerConfig, new MemoryManagerConfig(), featuresConfig, new HetuConfig(), new SnapshotConfig(), new NodeMemoryConfig())),
+                 new SchemaPropertyManager(),
+                 new TablePropertyManager(),
+                 new ColumnPropertyManager(),
+diff --git a/presto-main/src/test/java/io/prestosql/SessionTestUtils.java b/presto-main/src/test/java/io/prestosql/SessionTestUtils.java
+index b1e68469..8d554e71 100644
+--- a/presto-main/src/test/java/io/prestosql/SessionTestUtils.java
++++ b/presto-main/src/test/java/io/prestosql/SessionTestUtils.java
+@@ -17,6 +17,7 @@ import io.prestosql.client.ClientCapabilities;
+ import io.prestosql.execution.QueryManagerConfig;
+ import io.prestosql.execution.TaskManagerConfig;
+ import io.prestosql.memory.MemoryManagerConfig;
++import io.prestosql.memory.NodeMemoryConfig;
+ import io.prestosql.metadata.SessionPropertyManager;
+ import io.prestosql.snapshot.SnapshotConfig;
+ import io.prestosql.sql.analyzer.FeaturesConfig;
+@@ -60,7 +61,8 @@ public final class SessionTestUtils
+                 new MemoryManagerConfig(),
+                 new FeaturesConfig(),
+                 new HetuConfig(),
+-                snapshotConfig);
++                snapshotConfig,
++                new NodeMemoryConfig());
+         TEST_SNAPSHOT_SESSION = testSessionBuilder(new SessionPropertyManager(properties))
+                 .setCatalog("tpch")
+                 .setSchema(TINY_SCHEMA_NAME)
+diff --git a/presto-main/src/test/java/io/prestosql/sql/analyzer/TestAnalyzer.java b/presto-main/src/test/java/io/prestosql/sql/analyzer/TestAnalyzer.java
+index d47ec30d..67c57418 100644
+--- a/presto-main/src/test/java/io/prestosql/sql/analyzer/TestAnalyzer.java
++++ b/presto-main/src/test/java/io/prestosql/sql/analyzer/TestAnalyzer.java
+@@ -24,6 +24,7 @@ import io.prestosql.execution.QueryManagerConfig;
+ import io.prestosql.execution.TaskManagerConfig;
+ import io.prestosql.execution.warnings.WarningCollector;
+ import io.prestosql.memory.MemoryManagerConfig;
++import io.prestosql.memory.NodeMemoryConfig;
+ import io.prestosql.metadata.Catalog;
+ import io.prestosql.metadata.CatalogManager;
+ import io.prestosql.metadata.InMemoryNodeManager;
+@@ -596,7 +597,8 @@ public class TestAnalyzer
+                 new MemoryManagerConfig(),
+                 new FeaturesConfig().setMaxGroupingSets(2048),
+                 new HetuConfig(),
+-                new SnapshotConfig()))).build();
++                new SnapshotConfig(),
++                new NodeMemoryConfig()))).build();
+         analyze(session, "SELECT a, b, c, d, e, f, g, h, i, j, k, SUM(l)" +
+                 "FROM (VALUES (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12))\n" +
+                 "t (a, b, c, d, e, f, g, h, i, j, k, l)\n" +
+diff --git a/presto-tests/src/test/java/io/prestosql/memory/TestMemorySessionProperties.java b/presto-tests/src/test/java/io/prestosql/memory/TestMemorySessionProperties.java
+new file mode 100644
+index 00000000..dc86e65c
+--- /dev/null
++++ b/presto-tests/src/test/java/io/prestosql/memory/TestMemorySessionProperties.java
+@@ -0,0 +1,70 @@
++/*
++ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package io.prestosql.memory;
++
++import io.prestosql.Session;
++import io.prestosql.tests.AbstractTestQueryFramework;
++import io.prestosql.tests.tpch.TpchQueryRunnerBuilder;
++import org.testng.annotations.Test;
++
++import static io.prestosql.SystemSessionProperties.QUERY_MAX_MEMORY_PER_NODE;
++import static io.prestosql.SystemSessionProperties.QUERY_MAX_TOTAL_MEMORY_PER_NODE;
++import static org.testng.Assert.fail;
++
++public class TestMemorySessionProperties
++        extends AbstractTestQueryFramework
++{
++    public static final String sql = "SELECT COUNT(*), clerk FROM orders GROUP BY clerk";
++
++    TestMemorySessionProperties()
++    {
++        super(() -> TpchQueryRunnerBuilder.builder().setNodeCount(2).build());
++    }
++
++    @Test(timeOut = 240_000)
++    public void testSessionQueryMemoryPerNodeLimit()
++            throws Exception
++    {
++        assertQuery(sql);
++        Session session = Session.builder(getQueryRunner().getDefaultSession())
++                .setSystemProperty(QUERY_MAX_MEMORY_PER_NODE, "1kB")
++                .build();
++        try {
++            getQueryRunner().execute(session, sql);
++            fail("Expected query to fail due to low query_max_memory_per_node.");
++        }
++        catch (RuntimeException e) {
++            // expected
++        }
++    }
++
++    @Test(timeOut = 240_000)
++    public void testSessionQueryMaxTotalMemoryPerNodeLimit()
++            throws Exception
++    {
++        assertQuery(sql);
++        Session session = Session.builder(getQueryRunner().getDefaultSession())
++                .setSystemProperty(QUERY_MAX_TOTAL_MEMORY_PER_NODE, "1kB")
++                .build();
++        try {
++            getQueryRunner().execute(session, sql);
++            fail("Expected query to fail due to low query_max_memory_per_node.");
++        }
++        catch (RuntimeException e) {
++            // expected
++        }
++    }
++}
+-- 
+2.25.1
+
