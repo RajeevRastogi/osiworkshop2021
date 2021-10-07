@@ -1,0 +1,6 @@
+Add session properties for per-node memory limits
+Add random function taking range min, max
+Integer overflow when parsing dates beyond representable range
+Inconsistent error reporting when schema does not exist 
+Add large number format function
+Add reverse function for varbinary
