@@ -27,6 +27,9 @@
 		
 --This is going to take some time---
 
+--To try the already installed set-up, visit---
+	https://tryme.openlookeng.io/
+
 Once code and UT are developed; run UT
 1. Go to the module where UT is added
 	mvn -Dair.check.skip-all=false -Dmaven.test.skip=false -Dmaven.gitcommitid.skip=true -Dtest=TestClassName#testName test clean
