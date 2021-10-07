@@ -1,22 +1,32 @@
-1. Download Intellij
+1. Download git
+	a. Windows: https://git-scm.com/download/win
+	b. Linux: https://git-scm.com/download/linux
+	
+2. Download Intellij
   	a. Window: https://www.jetbrains.com/idea/download/#section=windows
   	b. Linux:  https://www.jetbrains.com/idea/download/#section=linux
   	
-2. Set mvn path
+3. Set mvn path
 	a. set PATH=%PATH%;<your mvn path>
 	b. export PATH=$PATH:<your mvn path>
 	  	
-3. Create github id, if already not there
+4. Create github id, if already not there
  	https://github.com/openlookeng
-4. Click on watch, star, fork
-5. Join openLooKeng Raffle
+5. Click on watch, star, fork
+
+6. Join openLooKeng Raffle
  	https://openlookeng.io/events/raffle.html
-6. Open intellij
+
+7. Open intellij
  	Click on 'Get from VCS'.
  	URL: Enter your repository path
  	Directory: Enter target directory to download code
- 	
-7. Code compilation 	
+
+8. Set mvn path
+	a. set PATH=%PATH%;<your mvn path>
+	b. export PATH=$PATH:<your mvn path> 	
+
+9. Code compilation 	
  	a. Download pre-built jars
  		https://github.com/RajeevRastogi/osiworkshop2021.git
  	b. From the path of prebuiltjars
